@@ -31,8 +31,7 @@ int layer_id_map[] = { 1, 16 };
 UL_ELEMENT selected_elements[];
 string layer_name_map[] = { "Top", "Bottom" };
 
-string replace_commas(string s)
-{
+string replace_commas(string s) {
     while (strstr(s, ",") >= 0) {  // convert commas to spaces
         string substitution_string = " ";
         sprintf(s, "%s%s%s", strsub(s, 0, strstr(s, ",")), substitution_string, strsub(s, strstr(s, ",")+1));
@@ -42,46 +41,75 @@ string replace_commas(string s)
 }
 
 if (board) board(B) {
+    // string txt;
+    // int layer_choice = 0;
 
-    string txt;
-    int layer_choice = 0;
+    // dlgDialog("Layer selection") {
+    //     dlgGroup("Export layer") {
+    //         dlgRadioButton("&Top", layer_choice);
+    //         dlgRadioButton("&Bottom", layer_choice);
+    //     }
+    //     dlgPushButton("OK") dlgAccept();
+    // };
 
-    dlgDialog("Layer selection") {
-        dlgGroup("Export layer") {
-            dlgRadioButton("&Top", layer_choice);
-            dlgRadioButton("&Bottom", layer_choice);
-        }
-        dlgPushButton("OK") dlgAccept();
-    };
-
-    string output_dir = dlgDirectory("Export files to", filedir(B.name));
+    // string output_dir = dlgDirectory("Export files to", filedir(B.name));
+    string output_dir = filedir(B.name);
 
     if (output_dir == "") {
         exit(0);
     }
 
-    int element_count = 0;
-
-    B.elements(E) if (E.populate) {
-        E.package.contacts(C) {
-            if (C.smd && C.smd.layer == layer_id_map[layer_choice]) {
-                selected_elements[element_count++] = E;
-                break;
-            }
-        }
-    }
-
     string base_path = (output_dir + "/" +
-        strsub(filename(B.name), 0, strlen(filename(B.name)) - 4) +
-        "_" + strlwr(layer_name_map[layer_choice]));
+        strsub(filename(B.name), 0, strlen(filename(B.name)) - 4));
 
     string cpl_filename = base_path + "_cpl.csv";
     string bom_filename = base_path + "_bom.csv";
 
-    output(cpl_filename) {
-        printf("Designator,Mid X,Mid Y,Layer,Rotation\n");
+    string cpl_content = "";
+    string bom_content = "";
 
-        for (int i = 0 ; i < element_count ; ++i) {
+    for (int layer_choice = 0 ; layer_choice < 2 ; ++layer_choice) {
+        int element_count = 0;
+
+        B.elements(E) if (E.populate) {
+            E.package.contacts(C) {
+                int populate = 1;
+
+                E.attributes(A) {
+                    if (A.name == "DNP" && A.value == "1") {
+                        populate = 0;
+                        break;
+                    }
+                }
+
+                if (populate == 1) {
+                    if (C.smd) {
+                        if (C.smd.layer == layer_id_map[layer_choice]) {
+                            selected_elements[element_count++] = E;
+                            break;
+                        }
+                    } else {
+                        if (E.mirror == layer_choice) {
+                            selected_elements[element_count++] = E;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        string base_layer_path = (base_path +
+            "_" + strlwr(layer_name_map[layer_choice]));
+
+        string cpl_layer_filename = base_layer_path + "_cpl.csv";
+        string bom_layer_filename = base_layer_path + "_bom.csv";
+
+        string cpl_layer_content = "";
+        string bom_layer_content = "";
+
+        int i = 0;
+
+        for (i = 0 ; i < element_count ; ++i) {
             UL_ELEMENT E = selected_elements[i];
             int angle = E.angle;
 
@@ -96,29 +124,34 @@ if (board) board(B) {
             }
 
             if (layer_name_map[layer_choice] == "Bottom") {
-              angle = (360 - angle);
-              angle = angle + 180;
-              angle = angle % 360;
+                angle = (360 - angle);
+                angle = angle + 180;
+                angle = angle % 360;
             }
+
             real ang = angle;
-            printf("%s,%5.2f,%5.2f,%s,%.1f\n",
-                E.name, u2mm(E.x), u2mm(E.y),
+            sprintf(cpl_layer_content, "%s%s,%5.2f,%5.2f,%s,%.1f\n",
+                cpl_layer_content, E.name, u2mm(E.x), u2mm(E.y),
                 layer_name_map[layer_choice],
                 ang);
         }
-    }
 
-    output(bom_filename) {
-        int i;
+        sprintf(cpl_content, "%s%s", cpl_content, cpl_layer_content);
+
+        output(cpl_layer_filename) {
+            printf("Designator,Mid X,Mid Y,Layer,Rotation\n");
+            printf("%s", cpl_layer_content);
+        }
+
         int indexes[];
         numeric string values[];
 
-        for (i=0 ; i < element_count ; ++i) {
+        for (i = 0 ; i < element_count ; ++i) {
             indexes[i] = i;
             values[i] = selected_elements[i].value;
         }
+
         sort(element_count, indexes, values);
-        printf("Comment,Designator,Footprint,LCSC Part #\n");
 
         string current_value = "";
         string current_footprint = "";
@@ -129,13 +162,14 @@ if (board) board(B) {
             UL_ELEMENT E = selected_elements[indexes[i]];
 
             if (current_value != "" && (E.value != current_value || E.footprint.name != current_footprint)) {
-                printf("%s,%s,%s,%s\n", current_value, designators, current_footprint, current_lcscpart);
+                sprintf(bom_layer_content, "%s%s,%s,%s,%s\n", bom_layer_content, current_value, designators, current_footprint, current_lcscpart);
                 designators = "";
             }
 
             if (designators != "") {
                 designators += " ";
             }
+
             designators += E.name;
             current_value = replace_commas(E.value);
             current_footprint = replace_commas(E.footprint.name);
@@ -147,13 +181,30 @@ if (board) board(B) {
                 }
             }
         }
+
         if (current_value != "") {
-          printf("%s,%s,%s,%s\n", current_value, designators, current_footprint, current_lcscpart);
+            sprintf(bom_layer_content, "%s%s,%s,%s,%s\n", bom_layer_content, current_value, designators, current_footprint, current_lcscpart);
+        }
+
+        sprintf(bom_content, "%s%s", bom_content, bom_layer_content);
+
+        output(bom_layer_filename) {
+            printf("Comment,Designator,Footprint,LCSC Part #\n");
+            printf("%s", bom_layer_content);
         }
     }
 
-  dlgMessageBox("BOM and CPL files have been exported to: " + output_dir, "OK");
+    output(cpl_filename) {
+        printf("Designator,Mid X,Mid Y,Layer,Rotation\n");
+        printf("%s", cpl_content);
+    }
 
+    output(bom_filename) {
+        printf("Comment,Designator,Footprint,LCSC Part #\n");
+        printf("%s", bom_content);
+    }
+
+  dlgMessageBox("BOM and CPL files have been exported to: " + output_dir, "OK");
 } else {
   dlgMessageBox("Run this ULP from a Board", "OK");
   exit (0);
